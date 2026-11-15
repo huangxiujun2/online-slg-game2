@@ -157,3 +157,107 @@ kbd { padding: 1px 4px; border: 1px solid #525b4b; border-radius: 2px; color: #d
 @media (min-width: 1200px) { .game-content { grid-template-columns: 264px minmax(0, 1fr); gap: 18px; }.side-panel { padding: 18px; } }
 @media (max-width: 850px) { .app-shell { padding: 0 4%; }.lobby { grid-template-columns: 1fr 1fr; gap: 4%; }.lobby-art { min-height: 430px; }.game-content { grid-template-columns: 220px minmax(0, 1fr); gap: 10px; }.side-panel { padding: 12px; }.battle-footer { flex-direction: column; }.battle-footer span:last-child { text-align: left; } }
 @media (max-width: 620px) { .topbar { height: 64px; }.topbar-meta { gap: 0; }.season-label { display: none; }.lobby { display: flex; min-height: auto; padding: 36px 0; }.lobby-art { position: absolute; z-index: -1; inset: 64px 0 auto; width: 100%; height: 300px; min-height: 0; border: 0; opacity: .48; }.lobby-panel { width: 100%; max-width: none; padding: 38px 4px; }.lobby-panel h1 { margin-top: 18px; font-size: 34px; }.lobby-intro { max-width: 360px; }.game-layout { padding-top: 23px; }.game-heading { align-items: flex-start; gap: 10px; }.game-heading h1 { font-size: 19px; }.room-code { gap: 7px; padding: 7px; }.room-code span { display: none; }.room-code strong { font-size: 14px; }.room-code button { padding: 4px; font-size: 9px; }.game-content { display: flex; flex-direction: column-reverse; }.battle-column { width: 100%; }.side-panel { width: 100%; }.player-card { display: inline-block; width: calc(50% - 4px); vertical-align: top; }.player-card + .player-card { margin: 0 0 0 4px; }.resource-section { display: inline-block; width: 48%; vertical-align: top; }.army-section { display: inline-block; width: 48%; margin-left: 3%; vertical-align: top; }.train-section { margin-top: 12px; }.battle-toolbar { height: 36px; }.battle-footer { font-size: 8px; }.site-footer { margin-top: 20px; font-size: 8px; }.art-caption { right: 18px; left: 18px; flex-direction: column; gap: 7px; } }
+
+.app-shell.is-game { position: fixed; inset: 0; width: 100%; height: 100dvh; min-height: 0; max-width: none; padding: 0; overflow: hidden; background: #101812; }
+.is-game .topbar { z-index: 4; height: 52px; flex: none; padding: 0 18px; border-bottom-color: #394438; background: linear-gradient(180deg, #202920, #171f18); box-shadow: 0 3px 12px #0005; }
+.is-game .brand { font-size: 16px; }
+.is-game .brand-mark { width: 26px; height: 26px; }
+.is-game .topbar-meta { gap: 20px; font-size: 9px; }
+.is-game .game-layout { min-height: 0; flex: 1; display: flex; flex-direction: column; padding: 0; }
+.is-game .game-heading { min-height: 62px; flex: none; gap: 22px; margin: 0; padding: 7px 18px; border-bottom: 1px solid #3b4538; background: linear-gradient(90deg, #252f25, #1a241d); }
+.game-heading-title { min-width: 185px; }
+.game-heading-title .eyebrow { font-size: 8px; }
+.game-heading-title strong { display: block; margin-top: 3px; color: #e8dfc9; font-family: 'Noto Serif TC', serif; font-size: 14px; letter-spacing: .04em; }
+.resource-ribbon { height: 100%; display: flex; align-items: center; gap: 8px; }
+.hud-resource { min-width: 130px; display: grid; grid-template-columns: 19px 1fr auto; align-items: center; column-gap: 6px; padding: 5px 10px; border: 1px solid #59604a70; background: #111a14a8; }
+.hud-resource .resource-icon { grid-row: 1 / 3; }
+.hud-resource > span:nth-child(2) { color: #a4aa98; font-size: 8px; }
+.hud-resource strong { grid-column: 2; grid-row: 2; color: #eadfc4; font-size: 12px; }
+.hud-resource small { grid-column: 3; grid-row: 1 / 3; color: #8d9c7d; font-size: 8px; }
+.is-game .game-content { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 258px; gap: 0; }
+.is-game .battle-column { min-width: 0; min-height: 0; grid-column: 1; grid-row: 1; display: flex; flex-direction: column; }
+.is-game .battle-toolbar { height: 36px; flex: none; padding: 0 13px; border: 0; border-bottom: 1px solid #424b3d; background: #1b251e; font-size: 9px; }
+.is-game .map-frame { min-height: 0; flex: 1; border: 0; }
+.is-game .battle-map { width: 100%; height: 100%; display: block; aspect-ratio: auto; touch-action: none; cursor: grab; user-select: none; }
+.is-game .battle-map.dragging { cursor: grabbing; }
+.is-game .map-unit { touch-action: manipulation; }
+.is-game .side-panel { min-height: 0; grid-column: 2; grid-row: 1; align-self: stretch; padding: 13px 12px; overflow-y: auto; border: 0; border-left: 1px solid #394438; background: linear-gradient(180deg, #1c261f, #151d18); }
+.is-game .panel-heading { padding: 2px 2px 11px; }
+.players-heading { margin: 12px 0 7px; color: #8f9988; font-size: 9px; letter-spacing: .08em; }
+.is-game .player-card { padding: 9px 8px; }
+.is-game .player-info strong { font-size: 10px; }
+.is-game .castle-health { margin-top: 8px; }
+.is-game .army-section, .is-game .train-section { margin-top: 13px; }
+.is-game .train-button { min-height: 42px; }
+.is-game .income-note { margin-top: 10px; }
+.is-game .resource-section { display: none; }
+.is-game .battle-footer { min-height: 32px; height: 32px; flex: none; flex-direction: row; align-items: center; padding: 0 13px; border-top: 1px solid #384236; background: #19221b; font-size: 8px; }
+.is-game .game-error { position: absolute; z-index: 5; right: 270px; bottom: 40px; padding: 5px 9px; background: #211b17e8; }
+.is-game .site-footer { display: none; }
+.minimap-panel { position: absolute; z-index: 2; bottom: 43px; left: 13px; width: 190px; padding: 7px; border: 1px solid #a7986b; background: #141d18eF; box-shadow: 0 4px 14px #0008; }
+.minimap-heading { display: flex; justify-content: space-between; padding: 0 2px 5px; color: #d7ceae; font-size: 8px; letter-spacing: .06em; }
+.minimap-heading span:last-child { color: #a7ad95; }
+.minimap { width: 100%; display: block; border: 1px solid #4f5945; cursor: crosshair; }
+.minimap-hint { padding-top: 4px; color: #899282; font-size: 7px; text-align: center; }
+.is-game .map-compass { z-index: 1; top: 12px; right: 14px; }
+
+@media (max-width: 800px) {
+  .is-game .topbar { padding: 0 11px; }
+  .is-game .topbar-meta { gap: 10px; }
+  .is-game .game-heading { min-height: 56px; padding: 5px 10px; }
+  .game-heading-title { min-width: 145px; }
+  .hud-resource { min-width: 95px; padding: 4px 6px; }
+  .is-game .game-content { grid-template-columns: minmax(0, 1fr) 220px; }
+  .is-game .side-panel { padding: 10px 8px; }
+  .minimap-panel { left: 8px; bottom: 40px; width: 160px; }
+}
+
+@media (max-width: 600px) {
+  .is-game .topbar { height: 46px; }
+  .is-game .topbar-meta { font-size: 8px; }
+  .is-game .season-label { display: none; }
+  .is-game .game-heading { min-height: 49px; gap: 5px; padding: 4px 8px; }
+  .game-heading-title { min-width: 100px; }
+  .game-heading-title .eyebrow { font-size: 7px; }
+  .game-heading-title strong { font-size: 10px; }
+  .resource-ribbon { gap: 3px; }
+  .hud-resource { min-width: 0; grid-template-columns: 14px auto; column-gap: 3px; padding: 3px 4px; }
+  .hud-resource .resource-icon { width: 14px; font-size: 10px; }
+  .hud-resource > span:nth-child(2) { font-size: 7px; }
+  .hud-resource strong { font-size: 9px; }
+  .hud-resource small { display: none; }
+  .is-game .game-content { display: flex; flex-direction: column; }
+  .is-game .battle-column { min-height: 0; flex: 1; order: 1; }
+  .is-game .battle-toolbar { height: 29px; padding: 0 8px; font-size: 8px; }
+  .is-game .battle-toolbar button { padding: 3px 5px; font-size: 8px; }
+  .is-game .battle-footer { height: 24px; min-height: 24px; padding: 0 8px; }
+  .is-game .battle-footer span:last-child { display: none; }
+  .is-game .side-panel { width: 100%; max-height: 155px; flex: none; order: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 6px; overflow-y: auto; border-top: 1px solid #394438; border-left: 0; }
+  .is-game .panel-heading, .is-game .army-section, .is-game .train-section { margin: 0; }
+  .is-game .panel-heading { grid-column: 1 / -1; padding: 0 2px 4px; font-size: 9px; }
+  .players-heading, .is-game .income-note { display: none; }
+  .is-game .player-card { padding: 5px; }
+  .is-game .player-info strong { font-size: 8px; }
+  .is-game .player-info > span, .is-game .castle-health > div { font-size: 7px; }
+  .is-game .team-emblem { width: 22px; height: 22px; }
+  .is-game .castle-health { margin-top: 4px; }
+  .is-game .army-counts > div { padding: 4px; font-size: 8px; }
+  .is-game .train-button { min-height: 34px; margin-top: 3px; padding: 3px; }
+  .is-game .train-copy strong, .is-game .train-cost { font-size: 7px; }
+  .is-game .train-copy small { font-size: 6px; }
+  .is-game .train-icon { width: 17px; font-size: 11px; }
+  .minimap-panel { bottom: 30px; left: 5px; width: 132px; padding: 4px; }
+  .minimap-hint { display: none; }
+  .is-game .game-error { right: 6px; bottom: 164px; max-width: 70%; }
+}
+
+@media (max-width: 380px) {
+  .is-game .brand { gap: 5px; font-size: 13px; }
+  .is-game .brand-mark { width: 22px; height: 22px; }
+  .is-game .topbar { padding: 0 7px; }
+  .is-game .connection { gap: 4px; }
+  .game-heading-title { min-width: 80px; }
+  .game-heading-title strong { font-size: 9px; }
+  .hud-resource { padding: 2px; }
+  .minimap-panel { width: 112px; }
+}

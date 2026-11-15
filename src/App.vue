@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const playerName = ref('')
 const offerInput = ref('')
@@ -13,10 +13,20 @@ const errorMessage = ref('')
 const peerConnected = ref(false)
 const mode = ref('lobby')
 const busy = ref(false)
+const mapSvg = ref(null)
+const mapViewport = ref({ x: 90, y: 65, width: 820, height: 520 })
+const mapViewBox = computed(() => {
+  const { x, y, width, height } = mapViewport.value
+  return `${x} ${y} ${width} ${height}`
+})
+const isMapDragging = ref(false)
 
 let peerConnection
 let dataChannel
 let gameTimer
+let resizeObserver
+let mapDrag
+let ignoreMapClick = false
 let lastIncome = Date.now()
 let lastBroadcast = Date.now()
 
@@ -337,10 +347,14 @@ function pointFor(unit) {
 }
 
 function handleMapClick(event) {
+  if (ignoreMapClick) {
+    ignoreMapClick = false
+    return
+  }
   if (!room.value || selectedIds.value.length === 0) return
   const bounds = event.currentTarget.getBoundingClientRect()
-  const sx = ((event.clientX - bounds.left) / bounds.width) * 1000
-  const sy = ((event.clientY - bounds.top) / bounds.height) * 650
+  const sx = mapViewport.value.x + ((event.clientX - bounds.left) / bounds.width) * mapViewport.value.width
+  const sy = mapViewport.value.y + ((event.clientY - bounds.top) / bounds.height) * mapViewport.value.height
   const dx = (sx - 500) / 4.5
   const dy = (sy - 115) / 2.1
   const x = (dx + dy) / 2
@@ -363,6 +377,79 @@ function handleKeydown(event) {
 
 function displayResource(value) {
   return Math.floor(value ?? 0)
+}
+
+function updateMapViewport() {
+  const bounds = mapSvg.value?.getBoundingClientRect()
+  if (!bounds?.width || !bounds.height) return
+  const previous = mapViewport.value
+  let width = 880
+  let height = width * bounds.height / bounds.width
+  if (height > 590) {
+    height = 590
+    width = height * bounds.width / bounds.height
+  }
+  const centerX = previous.x + previous.width / 2
+  const centerY = previous.y + previous.height / 2
+  mapViewport.value = {
+    width,
+    height,
+    x: Math.max(0, Math.min(1000 - width, centerX - width / 2)),
+    y: Math.max(0, Math.min(650 - height, centerY - height / 2)),
+  }
+}
+
+function startMapDrag(event) {
+  if (event.button !== 0) return
+  mapDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    viewX: mapViewport.value.x,
+    viewY: mapViewport.value.y,
+    moved: false,
+  }
+  event.currentTarget.setPointerCapture(event.pointerId)
+}
+
+function moveMap(event) {
+  if (!mapDrag || event.pointerId !== mapDrag.pointerId) return
+  const bounds = mapSvg.value.getBoundingClientRect()
+  const deltaX = event.clientX - mapDrag.startX
+  const deltaY = event.clientY - mapDrag.startY
+  if (!mapDrag.moved && Math.hypot(deltaX, deltaY) < 4) return
+  mapDrag.moved = true
+  isMapDragging.value = true
+  mapViewport.value = {
+    ...mapViewport.value,
+    x: Math.max(0, Math.min(1000 - mapViewport.value.width, mapDrag.viewX - deltaX * mapViewport.value.width / bounds.width)),
+    y: Math.max(0, Math.min(650 - mapViewport.value.height, mapDrag.viewY - deltaY * mapViewport.value.height / bounds.height)),
+  }
+}
+
+function endMapDrag() {
+  if (mapDrag?.moved) {
+    window.setTimeout(() => { isMapDragging.value = false }, 0)
+    ignoreMapClick = true
+    window.setTimeout(() => { ignoreMapClick = false }, 250)
+  }
+  mapDrag = null
+}
+
+function cancelMapDrag() {
+  mapDrag = null
+  isMapDragging.value = false
+}
+
+function centerMapFromMiniMap(event) {
+  const bounds = event.currentTarget.getBoundingClientRect()
+  const x = ((event.clientX - bounds.left) / bounds.width) * 1000
+  const y = ((event.clientY - bounds.top) / bounds.height) * 650
+  mapViewport.value = {
+    ...mapViewport.value,
+    x: Math.max(0, Math.min(1000 - mapViewport.value.width, x - mapViewport.value.width / 2)),
+    y: Math.max(0, Math.min(650 - mapViewport.value.height, y - mapViewport.value.height / 2)),
+  }
 }
 
 function simulateGame() {
@@ -444,14 +531,27 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 })
 
+watch(room, async (currentRoom) => {
+  resizeObserver?.disconnect()
+  resizeObserver = undefined
+  if (!currentRoom) return
+  await nextTick()
+  updateMapViewport()
+  if (mapSvg.value && 'ResizeObserver' in window) {
+    resizeObserver = new ResizeObserver(updateMapViewport)
+    resizeObserver.observe(mapSvg.value)
+  }
+}, { flush: 'post' })
+
 onBeforeUnmount(() => {
   closeConnection()
+  resizeObserver?.disconnect()
   window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell" :class="{ 'is-game': room }">
     <header class="topbar">
       <a class="brand" href="#" aria-label="邊境紀元首頁">
         <span class="brand-mark">✳</span>
@@ -504,16 +604,21 @@ onBeforeUnmount(() => {
 
     <section v-else class="game-layout">
       <div class="game-heading">
-        <div>
+        <div class="game-heading-title">
           <div class="eyebrow"><span></span> {{ isWaiting ? '等待對手加入' : room.status === 'finished' ? '戰局結束' : '戰役進行中' }}</div>
-          <h1>{{ isWaiting ? '你的戰場已準備就緒' : room.status === 'finished' ? (hasWon ? '旗開得勝。' : '下次再戰。') : '為你的王國而戰。' }}</h1>
+          <strong>{{ isWaiting ? '你的戰場已準備就緒' : room.status === 'finished' ? (hasWon ? '旗開得勝' : '下次再戰') : '為你的王國而戰' }}</strong>
         </div>
-        <div class="room-code"><span>連線方式</span><strong>瀏覽器直連</strong></div>
+        <div class="resource-ribbon">
+          <div class="hud-resource"><span class="resource-icon food-icon">✿</span><span>食物</span><strong>{{ displayResource(me?.resources.food) }}</strong><small>+{{ 1 + myUnits.filter((unit) => unit.type === 'worker').length }}/秒</small></div>
+          <div class="hud-resource"><span class="resource-icon wood-icon">♧</span><span>木材</span><strong>{{ displayResource(me?.resources.wood) }}</strong><small>+1/秒</small></div>
+          <div class="hud-resource"><span class="resource-icon gold-icon">◈</span><span>黃金</span><strong>{{ displayResource(me?.resources.gold) }}</strong><small>+1/秒</small></div>
+        </div>
       </div>
 
       <div class="game-content">
         <aside class="side-panel">
-          <div class="panel-heading"><span>⚑</span> 戰場情報 <span class="live-dot"></span></div>
+          <div class="panel-heading"><span>⚑</span> 指揮中心 <span class="live-dot"></span></div>
+          <div class="players-heading">戰場領主</div>
           <div v-for="player in room.players" :key="player.id" class="player-card" :class="{ 'is-me': player.id === myId }">
             <div class="player-top">
               <span class="team-emblem" :class="`team-${player.team}`">{{ player.team === 0 ? '✦' : '⚔' }}</span>
@@ -521,13 +626,6 @@ onBeforeUnmount(() => {
               <span class="online-dot" :class="{ offline: !player.connected }"></span>
             </div>
             <div class="castle-health"><div><span>城堡耐久</span><span>{{ player.castleHp }}%</span></div><i><b :class="`health-${player.team}`" :style="{ width: `${player.castleHp}%` }"></b></i></div>
-          </div>
-
-          <div class="resource-section">
-            <div class="panel-subheading">你的資源</div>
-            <div class="resource-item"><span class="resource-icon food-icon">✿</span><span>食物</span><strong>{{ displayResource(me?.resources.food) }}</strong></div>
-            <div class="resource-item"><span class="resource-icon wood-icon">♧</span><span>木材</span><strong>{{ displayResource(me?.resources.wood) }}</strong></div>
-            <div class="resource-item"><span class="resource-icon gold-icon">◈</span><span>黃金</span><strong>{{ displayResource(me?.resources.gold) }}</strong></div>
           </div>
 
           <div class="army-section">
@@ -553,7 +651,7 @@ onBeforeUnmount(() => {
             <button :disabled="myUnits.length === 0 || !isPlaying" @click="selectAll">選取全部 <kbd>A</kbd></button>
           </div>
           <div class="map-frame">
-            <svg class="battle-map" viewBox="0 0 1000 650" preserveAspectRatio="xMidYMid meet" role="application" aria-label="戰場地圖，選取部隊後點擊地面移動" @click="handleMapClick">
+            <svg ref="mapSvg" class="battle-map" :class="{ dragging: isMapDragging }" :viewBox="mapViewBox" preserveAspectRatio="xMidYMid meet" role="application" aria-label="戰場地圖，拖曳移動視野，選取部隊後點擊地面移動" @pointerdown="startMapDrag" @pointermove="moveMap" @pointerup="endMapDrag" @pointercancel="cancelMapDrag" @click="handleMapClick">
               <defs>
                 <linearGradient id="ground" x1="0" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#637b50" /><stop offset="1" stop-color="#3d5b3e" /></linearGradient>
                 <linearGradient id="castleRed" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d27a55" /><stop offset="1" stop-color="#773e37" /></linearGradient>
@@ -574,7 +672,7 @@ onBeforeUnmount(() => {
               <g class="castle" :transform="`translate(${pointFor({ x: 88, y: 50 }).x} ${pointFor({ x: 88, y: 50 }).y})`" filter="url(#shadow)">
                 <ellipse cy="15" rx="39" ry="14" fill="#23382b" opacity=".5" /><path d="M-26 4h52v-28h-52z" fill="url(#castleBlue)" stroke="#b8d5d4" stroke-width="1.5" /><path d="M-33 -23h15v-22h-15zM-8 -23h16v-29H-8zM18 -23h15v-22H18z" fill="#527583" stroke="#b8d5d4" stroke-width="1.5" /><path d="M-31 -45h11l-5.5 -8zM-6 -52h12l-6 -9zM20 -45h11l-5.5 -8z" fill="#82a8aa" /><path d="M-5 4v-18q5-10 10 0V4" fill="#374849" /><path d="M0 -54v-16" stroke="#c7e0d9" stroke-width="2" /><path d="M1 -69h16l-16 9z" fill="#8eb8b6" /><text y="26" text-anchor="middle" fill="#d5efea" font-size="12" font-weight="700">蒼狼城堡</text>
               </g>
-              <g v-for="unit in room.units" :key="unit.id" class="map-unit" :class="{ selected: selectedIds.includes(unit.id), 'enemy-unit': unit.owner !== myId }" :transform="`translate(${pointFor(unit).x} ${pointFor(unit).y})`" @click.stop="unit.owner === myId && toggleUnit(unit)">
+              <g v-for="unit in room.units" :key="unit.id" class="map-unit" :class="{ selected: selectedIds.includes(unit.id), 'enemy-unit': unit.owner !== myId }" :transform="`translate(${pointFor(unit).x} ${pointFor(unit).y})`" @pointerdown.stop @click.stop="unit.owner === myId && toggleUnit(unit)">
                 <ellipse cy="5" rx="11" ry="5" fill="#213027" opacity=".55" />
                 <circle v-if="selectedIds.includes(unit.id)" cy="1" r="15" fill="none" stroke="#f3d37e" stroke-width="2" stroke-dasharray="3 3" />
                 <circle cy="-5" r="9" :fill="getPlayerForUnit(unit)?.team === 0 ? (unit.type === 'worker' ? '#e5b075' : '#c16d56') : (unit.type === 'worker' ? '#a9c5bd' : '#6996a0')" stroke="#f3dfb2" stroke-width="1.5" />
@@ -584,6 +682,19 @@ onBeforeUnmount(() => {
               </g>
               <g v-if="room.units.length === 0" transform="translate(500 320)" pointer-events="none"><text text-anchor="middle" fill="#eee2be" font-size="17">等待戰局開始…</text><text y="25" text-anchor="middle" fill="#d8cca9" font-size="12">朋友加入後，村民就會抵達戰場</text></g>
             </svg>
+            <div class="minimap-panel">
+              <div class="minimap-heading"><span>戰場地圖</span><span>N ↑</span></div>
+              <svg class="minimap" viewBox="0 0 1000 650" aria-label="小地圖，點擊移動主視野" @click.stop="centerMapFromMiniMap">
+                <rect width="1000" height="650" fill="#213326" />
+                <polygon points="500,115 950,325 500,535 50,325" fill="#526b47" stroke="#a9a071" stroke-width="8" />
+                <path d="M170 333 Q300 278 415 316 T645 316 Q745 302 824 320" fill="none" stroke="#b09b68" stroke-width="20" />
+                <circle cx="329" cy="245" r="20" fill="#bd7757" stroke="#f0c48d" stroke-width="7" />
+                <circle cx="671" cy="405" r="20" fill="#668e95" stroke="#b6d2cc" stroke-width="7" />
+                <circle v-for="unit in room.units" :key="`mini-${unit.id}`" :cx="pointFor(unit).x" :cy="pointFor(unit).y" r="9" :fill="unit.owner === myId ? '#f0d07f' : '#dc8f78'" stroke="#1b261d" stroke-width="4" />
+                <rect :x="mapViewport.x" :y="mapViewport.y" :width="mapViewport.width" :height="mapViewport.height" fill="#e8d39a" fill-opacity=".08" stroke="#f0d18a" stroke-width="8" />
+              </svg>
+              <div class="minimap-hint">點擊小地圖移動視野</div>
+            </div>
             <div v-if="isWaiting" class="waiting-overlay">
               <div class="waiting-card connection-waiting-card">
                 <template v-if="role === 'host' && mode === 'host-offer'">
