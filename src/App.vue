@@ -1,51 +1,324 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { io } from 'socket.io-client'
 
-const socket = io()
 const playerName = ref('')
-const roomCodeInput = ref('')
+const offerInput = ref('')
+const answerInput = ref('')
+const hostOfferCode = ref('')
+const guestAnswerCode = ref('')
 const room = ref(null)
-const myId = ref('')
+const role = ref('')
 const selectedIds = ref([])
 const errorMessage = ref('')
-const connected = ref(false)
+const peerConnected = ref(false)
+const mode = ref('lobby')
+const busy = ref(false)
 
+let peerConnection
+let dataChannel
+let gameTimer
+let lastIncome = Date.now()
+let lastBroadcast = Date.now()
+
+const myId = computed(() => role.value === 'host' ? 'host' : 'guest')
 const me = computed(() => room.value?.players.find((player) => player.id === myId.value))
-const opponent = computed(() => room.value?.players.find((player) => player.id !== myId.value))
 const myUnits = computed(() => room.value?.units.filter((unit) => unit.owner === myId.value) ?? [])
 const selectedUnits = computed(() => myUnits.value.filter((unit) => selectedIds.value.includes(unit.id)))
 const isWaiting = computed(() => room.value?.status === 'waiting')
 const isPlaying = computed(() => room.value?.status === 'playing')
 const hasWon = computed(() => room.value?.winner === myId.value)
+const connected = computed(() => peerConnected.value)
 
 const trees = [
   [24, 21], [31, 28], [41, 18], [57, 25], [70, 18], [78, 32], [27, 73],
   [39, 81], [55, 74], [68, 84], [76, 70], [46, 37], [61, 58], [34, 57],
 ]
 
-function respondWithError(error) {
-  errorMessage.value = error?.message ?? '無法連線到遊戲伺服器。'
+function playerFor(id, name, team) {
+  return {
+    id,
+    name,
+    team,
+    connected: true,
+    resources: { food: 180, wood: 120, gold: 100 },
+    castleHp: 100,
+  }
 }
 
-function createRoom() {
-  errorMessage.value = ''
-  socket.emit('create-room', playerName.value, (result) => {
-    if (result?.error) errorMessage.value = result.error
-    else roomCodeInput.value = result.code
+function makeStartingUnit(id, owner, type, x, y) {
+  return { id, owner, type, x, y, target: null, hp: type === 'worker' ? 40 : 70, lastAttack: 0 }
+}
+
+function sendToPeer(message) {
+  if (dataChannel?.readyState === 'open') dataChannel.send(JSON.stringify(message))
+}
+
+function publishState() {
+  if (role.value === 'host') sendToPeer({ kind: 'state', state: JSON.parse(JSON.stringify(room.value)) })
+}
+
+function sendError(message) {
+  errorMessage.value = message
+  sendToPeer({ kind: 'error', message })
+}
+
+function startHostGame(opponentName) {
+  if (room.value.status !== 'waiting') return
+  room.value.players.push(playerFor('guest', opponentName, 1))
+  room.value.units.push(
+    makeStartingUnit('host-worker', 'host', 'worker', 18, 50),
+    makeStartingUnit('guest-worker', 'guest', 'worker', 82, 50),
+  )
+  room.value.status = 'playing'
+  mode.value = 'playing'
+  lastIncome = Date.now()
+  lastBroadcast = Date.now()
+  publishState()
+  gameTimer = window.setInterval(simulateGame, 100)
+}
+
+function handleHostMessage(message) {
+  if (message.kind === 'join') {
+    if (typeof message.name !== 'string' || !message.name.trim() || message.name.length > 16) {
+      sendError('玩家名稱無效，請重新建立連線。')
+      return
+    }
+    startHostGame(message.name.trim())
+    return
+  }
+  if (message.kind === 'action' && message.action) {
+    applyAction(message.action, 'guest')
+    return
+  }
+  if (message.kind === 'state-request') publishState()
+}
+
+function handleChannelMessage(event) {
+  let message
+  try {
+    message = JSON.parse(event.data)
+  } catch {
+    sendError('收到無法辨識的連線資料。')
+    return
+  }
+  if (!message || typeof message !== 'object') return
+  if (role.value === 'host') {
+    handleHostMessage(message)
+  } else if (message.kind === 'state' && message.state) {
+    room.value = message.state
+    mode.value = message.state.status === 'waiting' ? 'host-waiting' : 'playing'
+    selectedIds.value = selectedIds.value.filter((id) => message.state.units.some((unit) => unit.id === id))
+  } else if (message.kind === 'error' && typeof message.message === 'string') {
+    errorMessage.value = message.message
+  }
+}
+
+function attachDataChannel(channel) {
+  dataChannel = channel
+  channel.onopen = () => {
+    peerConnected.value = true
+    errorMessage.value = ''
+    if (role.value === 'host') {
+      mode.value = 'host-waiting'
+    } else {
+      sendToPeer({ kind: 'join', name: playerName.value.trim() })
+    }
+  }
+  channel.onmessage = handleChannelMessage
+  channel.onclose = () => {
+    peerConnected.value = false
+    if (room.value) {
+      const opponent = room.value.players.find((player) => player.id !== myId.value)
+      if (opponent) opponent.connected = false
+    }
+    errorMessage.value = '與房主的直接連線已中斷。'
+  }
+}
+
+function makePeerConnection() {
+  peerConnection = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  })
+  peerConnection.onconnectionstatechange = () => {
+    if (peerConnection.connectionState === 'failed') {
+      errorMessage.value = '目前網路無法建立直接連線，請確認雙方網路後重試。'
+    }
+  }
+  return peerConnection
+}
+
+function waitForIceGathering(peer) {
+  if (peer.iceGatheringState === 'complete') return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout)
+      peer.removeEventListener('icegatheringstatechange', handleChange)
+    }
+    const handleChange = () => {
+      if (peer.iceGatheringState !== 'complete') return
+      cleanup()
+      resolve()
+    }
+    const timeout = window.setTimeout(() => {
+      cleanup()
+      reject(new Error('連線資訊準備逾時，請再試一次。'))
+    }, 20000)
+    peer.addEventListener('icegatheringstatechange', handleChange)
   })
 }
 
-function joinRoom() {
+function encodeDescription(description) {
+  return btoa(JSON.stringify(description))
+}
+
+function decodeDescription(code, expectedType) {
+  const description = JSON.parse(atob(code.trim()))
+  if (description.type !== expectedType || typeof description.sdp !== 'string') {
+    throw new Error('連線代碼格式不正確，請確認複製完整。')
+  }
+  return description
+}
+
+function validatePlayerName() {
+  if (!playerName.value.trim() || playerName.value.trim().length > 16) {
+    errorMessage.value = '名稱需為 1 到 16 個字元。'
+    return false
+  }
+  return true
+}
+
+async function createRoom() {
+  if (!validatePlayerName()) return
   errorMessage.value = ''
-  socket.emit('join-room', { code: roomCodeInput.value, name: playerName.value }, (result) => {
-    if (result?.error) errorMessage.value = result.error
-  })
+  busy.value = true
+  role.value = 'host'
+  room.value = {
+    status: 'waiting',
+    winner: null,
+    players: [playerFor('host', playerName.value.trim(), 0)],
+    units: [],
+  }
+  try {
+    const peer = makePeerConnection()
+    attachDataChannel(peer.createDataChannel('frontier-game'))
+    const offer = await peer.createOffer()
+    await peer.setLocalDescription(offer)
+    await waitForIceGathering(peer)
+    hostOfferCode.value = encodeDescription(peer.localDescription)
+    mode.value = 'host-offer'
+  } catch (error) {
+    errorMessage.value = error.message || '無法建立連線邀請。'
+    closeConnection()
+    room.value = null
+    role.value = ''
+  } finally {
+    busy.value = false
+  }
+}
+
+async function joinRoom() {
+  if (!validatePlayerName()) return
+  errorMessage.value = ''
+  if (!offerInput.value.trim()) {
+    errorMessage.value = '請先貼上房主傳來的連線代碼。'
+    return
+  }
+  busy.value = true
+  role.value = 'guest'
+  try {
+    const peer = makePeerConnection()
+    peer.ondatachannel = (event) => attachDataChannel(event.channel)
+    await peer.setRemoteDescription(decodeDescription(offerInput.value, 'offer'))
+    const answer = await peer.createAnswer()
+    await peer.setLocalDescription(answer)
+    await waitForIceGathering(peer)
+    guestAnswerCode.value = encodeDescription(peer.localDescription)
+    mode.value = 'guest-answer'
+  } catch (error) {
+    errorMessage.value = error.message || '無法建立回覆代碼。'
+    closeConnection()
+    role.value = ''
+  } finally {
+    busy.value = false
+  }
+}
+
+async function acceptAnswer() {
+  if (!answerInput.value.trim()) {
+    errorMessage.value = '請貼上朋友回傳的連線代碼。'
+    return
+  }
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    await peerConnection.setRemoteDescription(decodeDescription(answerInput.value, 'answer'))
+    mode.value = 'host-waiting'
+  } catch (error) {
+    errorMessage.value = error.message || '無法使用這組連線代碼。'
+  } finally {
+    busy.value = false
+  }
+}
+
+async function copyText(value) {
+  try {
+    await navigator.clipboard.writeText(value)
+    errorMessage.value = ''
+  } catch {
+    errorMessage.value = '無法使用剪貼簿，請手動選取並複製代碼。'
+  }
+}
+
+function applyAction(action, owner) {
+  if (!room.value || room.value.status !== 'playing') return
+  if (action.type === 'train') {
+    const type = action.unitType
+    if (type !== 'worker' && type !== 'soldier') return
+    if (room.value.units.length >= 30) {
+      if (owner === myId.value) errorMessage.value = '部隊已達上限。'
+      else sendError('部隊已達上限。')
+      return
+    }
+    const player = room.value.players.find((item) => item.id === owner)
+    if (!player) return
+    const cost = type === 'worker' ? { food: 50, gold: 0 } : { food: 70, gold: 30 }
+    if (player.resources.food < cost.food || player.resources.gold < cost.gold) {
+      if (owner === myId.value) errorMessage.value = '資源不足，無法訓練。'
+      else sendError('資源不足，無法訓練。')
+      return
+    }
+    player.resources.food -= cost.food
+    player.resources.gold -= cost.gold
+    const baseX = player.team === 0 ? 12 : 88
+    room.value.units.push(makeStartingUnit(
+      `${owner}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      owner,
+      type,
+      baseX + (player.team === 0 ? 6 : -6),
+      50 + (Math.random() * 8 - 4),
+    ))
+  } else if (action.type === 'move') {
+    if (!Array.isArray(action.unitIds) || !Number.isFinite(action.x) || !Number.isFinite(action.y)) return
+    const selected = new Set(action.unitIds.slice(0, 30))
+    room.value.units.forEach((unit) => {
+      if (unit.owner === owner && selected.has(unit.id)) {
+        unit.target = {
+          x: Math.max(3, Math.min(97, action.x)),
+          y: Math.max(3, Math.min(97, action.y)),
+        }
+      }
+    })
+  } else {
+    return
+  }
+  publishState()
 }
 
 function train(type) {
   if (!room.value) return
-  socket.emit('train-unit', { code: room.value.code, type })
+  const action = { type: 'train', unitType: type }
+  if (role.value === 'host') applyAction(action, 'host')
+  else sendToPeer({ kind: 'action', action })
 }
 
 function toggleUnit(unit) {
@@ -73,7 +346,9 @@ function handleMapClick(event) {
   const x = (dx + dy) / 2
   const y = (dy - dx) / 2
   if (x < 0 || x > 100 || y < 0 || y > 100) return
-  socket.emit('move-units', { code: room.value.code, unitIds: selectedIds.value, x, y })
+  const action = { type: 'move', unitIds: selectedIds.value, x, y }
+  if (role.value === 'host') applyAction(action, 'host')
+  else sendToPeer({ kind: 'action', action })
   selectedIds.value = []
 }
 
@@ -90,11 +365,54 @@ function displayResource(value) {
   return Math.floor(value ?? 0)
 }
 
-async function copyRoomCode() {
-  try {
-    await navigator.clipboard.writeText(room.value.code)
-  } catch {
-    errorMessage.value = '無法複製房間代碼，請手動分享代碼。'
+function simulateGame() {
+  if (role.value !== 'host' || room.value?.status !== 'playing') return
+  const now = Date.now()
+  if (now - lastIncome >= 1000) {
+    const seconds = Math.floor((now - lastIncome) / 1000)
+    lastIncome += seconds * 1000
+    room.value.players.forEach((player) => {
+      const workers = room.value.units.filter((unit) => unit.owner === player.id && unit.type === 'worker').length
+      player.resources.food += seconds * (1 + workers)
+      player.resources.wood += seconds
+      player.resources.gold += seconds
+    })
+  }
+  for (const unit of room.value.units) {
+    if (unit.type === 'soldier') {
+      const enemy = room.value.players.find((player) => player.id !== unit.owner)
+      if (enemy) {
+        const castleX = enemy.team === 0 ? 12 : 88
+        if (Math.hypot(unit.x - castleX, unit.y - 50) <= 7) {
+          unit.target = null
+          if (now - unit.lastAttack >= 900) {
+            enemy.castleHp = Math.max(0, enemy.castleHp - 8)
+            unit.lastAttack = now
+          }
+        }
+      }
+    }
+    if (unit.target) {
+      const dx = unit.target.x - unit.x
+      const dy = unit.target.y - unit.y
+      const length = Math.hypot(dx, dy)
+      const step = Math.min(length, 0.9)
+      if (length < 0.8) unit.target = null
+      else {
+        unit.x += (dx / length) * step
+        unit.y += (dy / length) * step
+      }
+    }
+  }
+  if (room.value.players.some((player) => player.castleHp <= 0)) {
+    room.value.status = 'finished'
+    room.value.winner = room.value.players.find((player) => player.castleHp > 0)?.id ?? null
+    window.clearInterval(gameTimer)
+    gameTimer = null
+  }
+  if (now - lastBroadcast >= 250) {
+    lastBroadcast = now
+    publishState()
   }
 }
 
@@ -102,27 +420,32 @@ function getPlayerForUnit(unit) {
   return room.value?.players.find((player) => player.id === unit.owner)
 }
 
+function closeConnection() {
+  window.clearInterval(gameTimer)
+  gameTimer = null
+  dataChannel?.close()
+  peerConnection?.close()
+  dataChannel = undefined
+  peerConnection = undefined
+  peerConnected.value = false
+}
+
+function resetToLobby() {
+  closeConnection()
+  role.value = ''
+  room.value = null
+  mode.value = 'lobby'
+  guestAnswerCode.value = ''
+  offerInput.value = ''
+  errorMessage.value = ''
+}
+
 onMounted(() => {
-  socket.on('connect', () => {
-    connected.value = true
-    errorMessage.value = ''
-  })
-  socket.on('disconnect', () => {
-    connected.value = false
-    errorMessage.value = '與伺服器的連線中斷，請重新整理頁面。'
-  })
-  socket.on('connect_error', respondWithError)
-  socket.on('identity', (id) => { myId.value = id })
-  socket.on('game-state', (state) => {
-    room.value = state
-    selectedIds.value = selectedIds.value.filter((id) => state.units.some((unit) => unit.id === id))
-  })
-  socket.on('game-error', (message) => { errorMessage.value = message })
   window.addEventListener('keydown', handleKeydown)
 })
 
 onBeforeUnmount(() => {
-  socket.disconnect()
+  closeConnection()
   window.removeEventListener('keydown', handleKeydown)
 })
 </script>
@@ -136,7 +459,7 @@ onBeforeUnmount(() => {
       </a>
       <div class="topbar-meta">
         <span class="season-label">即時策略 · 多人對戰</span>
-        <span class="connection"><i :class="{ online: connected }"></i>{{ connected ? '伺服器連線正常' : '連線中…' }}</span>
+        <span class="connection"><i :class="{ online: connected }"></i>{{ connected ? '玩家直接連線中' : role === 'guest' ? '正在準備加入' : '瀏覽器房主模式' }}</span>
       </div>
     </header>
 
@@ -149,23 +472,33 @@ onBeforeUnmount(() => {
         <div class="art-caption"><span>THE FRONTIER AWAITS</span><span>一場新的征途，即將展開</span></div>
       </div>
       <div class="lobby-panel">
-        <div class="eyebrow"><span></span> 建立你的傳奇</div>
-        <h1>疆界之外，<br /><em>勝者為王。</em></h1>
-        <p class="lobby-intro">召集你的部隊，發展城鎮，與朋友展開一場即時策略對決。</p>
+        <template v-if="mode === 'lobby'">
+          <div class="eyebrow"><span></span> 建立你的傳奇</div>
+          <h1>疆界之外，<br /><em>勝者為王。</em></h1>
+          <p class="lobby-intro">召集你的部隊，發展城鎮，與朋友展開一場即時策略對決。</p>
 
-        <label class="field-label" for="player-name">你的名字</label>
-        <input id="player-name" v-model="playerName" maxlength="16" placeholder="輸入你的名字" autocomplete="nickname" />
+          <label class="field-label" for="player-name">你的名字</label>
+          <input id="player-name" v-model="playerName" maxlength="16" placeholder="輸入你的名字" autocomplete="nickname" />
 
-        <button class="primary-button" :disabled="!connected" @click="createRoom">
-          <span>建立新戰局</span><span class="button-arrow">↗</span>
-        </button>
-        <div class="divider"><span>或加入朋友的戰局</span></div>
-        <div class="join-row">
-          <input v-model="roomCodeInput" maxlength="5" placeholder="輸入房間代碼" aria-label="房間代碼" @keyup.enter="joinRoom" />
-          <button class="join-button" :disabled="!connected" @click="joinRoom">加入</button>
+          <button class="primary-button" :disabled="busy" @click="createRoom">
+            <span>{{ busy ? '正在準備連線…' : '建立新戰局' }}</span><span class="button-arrow">↗</span>
+          </button>
+          <div class="divider"><span>或加入朋友的戰局</span></div>
+          <label class="field-label" for="offer-code">貼上房主傳來的連線代碼</label>
+          <textarea id="offer-code" v-model="offerInput" class="connection-code-input" rows="3" placeholder="貼上房主提供的連線代碼"></textarea>
+          <button class="join-button join-wide" :disabled="busy" @click="joinRoom">{{ busy ? '正在建立回覆…' : '加入朋友的戰局' }}</button>
+          <p class="lobby-foot"><span>⚔</span> 兩位玩家直接連線 · 房主需保持瀏覽器開啟</p>
+        </template>
+        <div v-else class="guest-answer">
+          <div class="eyebrow"><span></span> 回覆房主邀請</div>
+          <h1>再一步，<br /><em>加入戰場。</em></h1>
+          <p class="lobby-intro">複製下方回覆代碼傳回房主；房主確認後就會進入戰局。</p>
+          <label class="field-label" for="answer-code">你的連線回覆代碼</label>
+          <textarea id="answer-code" :value="guestAnswerCode" class="connection-code-input" rows="6" readonly></textarea>
+          <button class="primary-button" @click="copyText(guestAnswerCode)"><span>複製回覆代碼</span><span class="button-arrow">⧉</span></button>
+          <button class="back-button" @click="resetToLobby">返回首頁</button>
         </div>
         <p v-if="errorMessage" class="error-message" role="alert">{{ errorMessage }}</p>
-        <div class="lobby-foot"><span>⚔</span> 最多 2 位玩家 · 即時同步 · 無需註冊</div>
       </div>
     </section>
 
@@ -175,7 +508,7 @@ onBeforeUnmount(() => {
           <div class="eyebrow"><span></span> {{ isWaiting ? '等待對手加入' : room.status === 'finished' ? '戰局結束' : '戰役進行中' }}</div>
           <h1>{{ isWaiting ? '你的戰場已準備就緒' : room.status === 'finished' ? (hasWon ? '旗開得勝。' : '下次再戰。') : '為你的王國而戰。' }}</h1>
         </div>
-        <div class="room-code"><span>房間代碼</span><strong>{{ room.code }}</strong><button title="複製房間代碼" @click="copyRoomCode">複製</button></div>
+        <div class="room-code"><span>連線方式</span><strong>瀏覽器直連</strong></div>
       </div>
 
       <div class="game-content">
@@ -251,7 +584,25 @@ onBeforeUnmount(() => {
               </g>
               <g v-if="room.units.length === 0" transform="translate(500 320)" pointer-events="none"><text text-anchor="middle" fill="#eee2be" font-size="17">等待戰局開始…</text><text y="25" text-anchor="middle" fill="#d8cca9" font-size="12">朋友加入後，村民就會抵達戰場</text></g>
             </svg>
-            <div v-if="isWaiting" class="waiting-overlay"><div class="waiting-card"><span class="waiting-spinner"></span><strong>等待另一位領主加入</strong><p>將房間代碼分享給朋友</p><div>{{ room.code }}</div></div></div>
+            <div v-if="isWaiting" class="waiting-overlay">
+              <div class="waiting-card connection-waiting-card">
+                <template v-if="role === 'host' && mode === 'host-offer'">
+                  <strong>把房主連線代碼傳給朋友</strong>
+                  <p>朋友貼上代碼後，會回傳一組回覆代碼給你。</p>
+                  <textarea v-model="hostOfferCode" class="connection-code-input" rows="4" readonly aria-label="房主連線代碼"></textarea>
+                  <button class="join-button join-wide" @click="copyText(hostOfferCode)">複製房主連線代碼</button>
+                  <label class="field-label answer-label" for="host-answer">貼上朋友回傳的連線代碼</label>
+                  <textarea id="host-answer" v-model="answerInput" class="connection-code-input" rows="3" placeholder="朋友回傳的連線代碼"></textarea>
+                  <button class="primary-button connect-button" :disabled="busy" @click="acceptAnswer">{{ busy ? '正在連線…' : '確認並連線' }}</button>
+                </template>
+                <template v-else>
+                  <span class="waiting-spinner"></span>
+                  <strong>{{ peerConnected ? '等待朋友完成加入' : '等待另一位領主加入' }}</strong>
+                  <p>{{ peerConnected ? '點對點連線已建立，正在同步戰局。' : '房主已分享連線代碼後，朋友即可加入。' }}</p>
+                  <textarea v-if="role === 'host'" v-model="hostOfferCode" class="connection-code-input" rows="3" readonly aria-label="房主連線代碼"></textarea>
+                </template>
+              </div>
+            </div>
             <div v-if="room.status === 'finished'" class="finished-overlay"><div class="finished-card"><span>{{ hasWon ? '✦ 勝利' : '⚔ 戰敗' }}</span><strong>{{ hasWon ? '你的城堡屹立不搖。' : '你的城堡已經陷落。' }}</strong><p>重新整理頁面即可開啟新的戰局</p></div></div>
             <div class="map-compass">N <span>✦</span></div>
           </div>

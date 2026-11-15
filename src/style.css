@@ -52,6 +52,8 @@ h1 em { color: #d2ae76; font-style: normal; }
 .lobby-intro { margin: 0 0 34px; color: #929b8b; font-size: 12px; line-height: 1.9; }
 .field-label { display: block; margin: 0 0 8px; color: #a7aa98; font-size: 11px; }
 .lobby-panel input { width: 100%; height: 46px; padding: 0 14px; outline: 0; border: 1px solid #344035; border-radius: 2px; background: #151e17; color: #e8e1d0; font-size: 12px; }
+.lobby-panel textarea, .waiting-card textarea { width: 100%; padding: 10px 12px; outline: 0; border: 1px solid #344035; border-radius: 2px; background: #111a14; color: #d7d1bf; font-family: 'DM Sans', sans-serif; font-size: 10px; line-height: 1.5; resize: vertical; overflow-wrap: anywhere; }
+.lobby-panel textarea:focus, .waiting-card textarea:focus { border-color: #92784d; }
 .lobby-panel input::placeholder { color: #657062; }
 .lobby-panel input:focus { border-color: #92784d; }
 .primary-button { width: 100%; height: 48px; margin-top: 13px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #c49a5e; border-radius: 2px; background: linear-gradient(100deg, #c59c63, #b38652); color: #191b14; font-size: 12px; font-weight: 700; letter-spacing: .07em; transition: filter .2s, transform .2s; }
@@ -63,6 +65,9 @@ h1 em { color: #d2ae76; font-style: normal; }
 .join-row { display: flex; gap: 8px; }
 .join-row input { flex: 1; text-transform: uppercase; letter-spacing: .14em; }
 .join-button { width: 77px; border: 1px solid #485245; border-radius: 2px; background: #222d23; color: #e0d8c6; font-size: 12px; }
+.join-wide { width: 100%; min-height: 40px; margin-top: 9px; }
+.guest-answer .primary-button { margin-top: 12px; }
+.back-button { width: 100%; margin-top: 12px; padding: 8px; border: 1px solid #485245; background: transparent; color: #abb09f; font-size: 10px; }
 .join-button:hover:not(:disabled) { border-color: #a88b5d; }
 .error-message { margin: 11px 0 0; color: #e49b82; font-size: 11px; }
 .lobby-foot { margin-top: 30px; color: #697466; font-size: 10px; }
@@ -132,6 +137,10 @@ kbd { padding: 1px 4px; border: 1px solid #525b4b; border-radius: 2px; color: #d
 .map-unit.enemy-unit { cursor: default; }
 .waiting-overlay, .finished-overlay { position: absolute; inset: 0; display: grid; place-items: center; background: #121b17a6; }
 .waiting-card, .finished-card { width: min(320px, 88%); padding: 25px; border: 1px solid #a68b5c77; background: #18231eeb; text-align: center; }
+.connection-waiting-card { width: min(440px, 94%); max-height: 92%; overflow: auto; text-align: left; }
+.connection-waiting-card > strong, .connection-waiting-card > p { text-align: center; }
+.connection-waiting-card .answer-label { margin-top: 14px; }
+.connection-waiting-card .connect-button { height: 40px; margin-top: 8px; }
 .waiting-card strong, .finished-card strong { display: block; margin-top: 13px; color: #e7deca; font-family: 'Noto Serif TC', serif; font-size: 15px; }
 .waiting-card p, .finished-card p { color: #9ca394; font-size: 10px; }
 .waiting-card > div { margin: 12px auto 0; color: #e2c48e; font-size: 25px; font-weight: 700; letter-spacing: .22em; }

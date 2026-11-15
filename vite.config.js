@@ -2,13 +2,6 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
+  base: process.env.GITHUB_ACTIONS === 'true' ? '/online-slg-game2/' : '/',
   plugins: [vue()],
-  server: {
-    proxy: {
-      '/socket.io': {
-        target: 'http://localhost:3001',
-        ws: true,
-      },
-    },
-  },
 })
